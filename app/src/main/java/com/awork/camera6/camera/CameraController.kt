@@ -4,9 +4,6 @@ import android.Manifest
 import android.content.ContentValues
 import android.content.Context
 import android.content.pm.PackageManager
-import android.hardware.camera2.CameraCaptureSession
-import android.hardware.camera2.CaptureRequest
-import android.hardware.camera2.TotalCaptureResult
 import android.media.MediaActionSound
 import android.os.Build
 import android.os.Handler
@@ -15,11 +12,7 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import android.provider.MediaStore
-import androidx.annotation.OptIn
-import androidx.camera.camera2.interop.Camera2Interop
-import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.CameraSelector
-import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.Preview
@@ -56,7 +49,6 @@ class CameraController(
     private var videoCapture: VideoCapture<Recorder>? = null
     private var preview: Preview? = null
     private var previewView: PreviewView? = null
-    private var imageAnalysis: ImageAnalysis? = null
     private var activeRecording: Recording? = null
     private var cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
     private val cameraExecutor: ExecutorService = Executors.newSingleThreadExecutor()
@@ -64,7 +56,6 @@ class CameraController(
     private var isFrontCamera = false
     private val mainHandler = Handler(Looper.getMainLooper())
     private var autoCaptureRunnable: Runnable? = null
-    private var lastFaceCaptureTime = 0L
     private var mediaActionSound: MediaActionSound? = null
 
     @Volatile
@@ -73,11 +64,6 @@ class CameraController(
     @Volatile
     var isAutoCapturing = false
         private set
-    @Volatile
-    var isFaceDetecting = false
-        private set
-
-    var onFaceDetectedListener: (() -> Unit)? = null
 
     init {
         isFrontCamera = preferences.defaultCamera.equals("front", ignoreCase = true)
@@ -128,10 +114,6 @@ class CameraController(
                 useCases.add(p)
             }
 
-            if (isFaceDetecting) {
-                setupFaceAnalysis()?.let { useCases.add(it) }
-            }
-
             provider.bindToLifecycle(
                 owner,
                 cameraSelector,
@@ -142,57 +124,12 @@ class CameraController(
         }
     }
 
-    @OptIn(ExperimentalCamera2Interop::class)
-    private fun setupFaceAnalysis(): ImageAnalysis? {
-        val builder = ImageAnalysis.Builder()
-            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-
-        val camera2Extender = Camera2Interop.Extender(builder)
-        camera2Extender.setCaptureRequestOption(
-            CaptureRequest.STATISTICS_FACE_DETECT_MODE,
-            CaptureRequest.STATISTICS_FACE_DETECT_MODE_SIMPLE
-        )
-        camera2Extender.setSessionCaptureCallback(object : CameraCaptureSession.CaptureCallback() {
-            override fun onCaptureCompleted(
-                session: CameraCaptureSession,
-                request: CaptureRequest,
-                result: TotalCaptureResult
-            ) {
-                super.onCaptureCompleted(session, request, result)
-                if (!isFaceDetecting || isRecording) return
-                val faces = result.get(android.hardware.camera2.CaptureResult.STATISTICS_FACES)
-                if (!faces.isNullOrEmpty()) {
-                    val now = System.currentTimeMillis()
-                    if (now - lastFaceCaptureTime > 3000L) {
-                        lastFaceCaptureTime = now
-                        mainHandler.post {
-                            if (isFaceDetecting && !isRecording) {
-                                onFaceDetectedListener?.invoke()
-                                captureSingle()
-                            }
-                        }
-                    }
-                }
-            }
-        })
-
-        return builder.build().also { analysis ->
-            imageAnalysis = analysis
-            analysis.setAnalyzer(cameraExecutor) { imageProxy ->
-                imageProxy.close()
-            }
-        }
-    }
-
     fun switchCamera() {
         if (isRecording) {
             stopRecording()
         }
         if (isAutoCapturing) {
             stopAutoCapture()
-        }
-        if (isFaceDetecting) {
-            stopFaceDetection()
         }
         isFrontCamera = !isFrontCamera
         preferences.defaultCamera = if (isFrontCamera) "front" else "back"
@@ -295,23 +232,6 @@ class CameraController(
         isAutoCapturing = false
         autoCaptureRunnable?.let { mainHandler.removeCallbacks(it) }
         autoCaptureRunnable = null
-    }
-
-    fun startFaceDetection() {
-        if (isRecording) return
-        if (isFaceDetecting) {
-            stopFaceDetection()
-            return
-        }
-        isFaceDetecting = true
-        bindUseCases()
-    }
-
-    fun stopFaceDetection() {
-        isFaceDetecting = false
-        imageAnalysis?.clearAnalyzer()
-        imageAnalysis = null
-        bindUseCases()
     }
 
     fun startRecording() {
@@ -440,7 +360,6 @@ class CameraController(
         try {
             if (isAutoCapturing) stopAutoCapture()
             if (isRecording) stopRecording()
-            if (isFaceDetecting) stopFaceDetection()
             mediaActionSound?.release()
             mediaActionSound = null
             cameraExecutor.shutdown()

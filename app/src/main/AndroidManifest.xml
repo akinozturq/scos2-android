@@ -90,7 +90,6 @@
                 <action android:name="com.awork.camera6.action.CAPTURE_SINGLE" />
                 <action android:name="com.awork.camera6.action.CAPTURE_BURST" />
                 <action android:name="com.awork.camera6.action.CAPTURE_AUTO" />
-                <action android:name="com.awork.camera6.action.CAPTURE_FACE" />
                 <action android:name="com.awork.camera6.action.RECORD_VIDEO" />
                 <action android:name="com.awork.camera6.action.STOP_RECORDING" />
             </intent-filter>

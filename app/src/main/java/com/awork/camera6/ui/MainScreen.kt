@@ -99,7 +99,6 @@ fun CameraControlGrid() {
         ControlItem("Single", Icons.Default.CameraAlt, SpyCamService.ACTION_CAPTURE_SINGLE),
         ControlItem("Burst", Icons.Default.BurstMode, SpyCamService.ACTION_CAPTURE_BURST),
         ControlItem("Auto", Icons.Default.Timer, SpyCamService.ACTION_CAPTURE_AUTO),
-        ControlItem("Face", Icons.Default.Face, SpyCamService.ACTION_CAPTURE_FACE),
         ControlItem("Video", Icons.Default.Videocam, SpyCamService.ACTION_RECORD_VIDEO),
         ControlItem("Black", Icons.Default.DarkMode, SpyCamService.ACTION_BLACK_MODE),
     )

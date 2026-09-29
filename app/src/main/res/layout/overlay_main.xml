@@ -26,7 +26,6 @@
     <ImageButton android:id="@+id/btn_burst" android:layout_width="48dp" android:layout_height="48dp" android:src="@android:drawable/ic_menu_gallery" android:background="@null" android:contentDescription="Burst" />
     <ImageButton android:id="@+id/btn_video" android:layout_width="48dp" android:layout_height="48dp" android:src="@android:drawable/ic_menu_slideshow" android:background="@null" android:contentDescription="Video" />
     <ImageButton android:id="@+id/btn_preview" android:layout_width="48dp" android:layout_height="48dp" android:src="@android:drawable/ic_menu_view" android:background="@null" android:contentDescription="Preview" />
-    <ImageButton android:id="@+id/btn_face" android:layout_width="48dp" android:layout_height="48dp" android:src="@android:drawable/ic_menu_myplaces" android:background="@null" android:contentDescription="Face Detection" />
     <ImageButton android:id="@+id/btn_switch" android:layout_width="48dp" android:layout_height="48dp" android:src="@android:drawable/ic_menu_rotate" android:background="@null" android:contentDescription="Switch" />
     <ImageButton android:id="@+id/btn_black" android:layout_width="48dp" android:layout_height="48dp" android:src="@android:drawable/ic_lock_lock" android:background="@null" android:contentDescription="Black" />
     <ImageButton android:id="@+id/btn_hide" android:layout_width="48dp" android:layout_height="48dp" android:src="@android:drawable/ic_menu_close_clear_cancel" android:background="@null" android:contentDescription="Hide" />

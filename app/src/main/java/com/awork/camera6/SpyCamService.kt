@@ -65,19 +65,6 @@ class SpyCamService : LifecycleService() {
                 ACTION_CAPTURE_BURST -> handleVolumeAction("burst")
                 ACTION_CAPTURE_AUTO -> handleVolumeAction("auto")
                 ACTION_STOP_AUTO -> cameraController.stopAutoCapture()
-                ACTION_CAPTURE_FACE -> {
-                    if (cameraController.isFaceDetecting) {
-                        cameraController.stopFaceDetection()
-                        if (!preferences.disableToast) {
-                            Toast.makeText(applicationContext, "Face Detection Stopped", Toast.LENGTH_SHORT).show()
-                        }
-                    } else {
-                        cameraController.startFaceDetection()
-                        if (!preferences.disableToast) {
-                            Toast.makeText(applicationContext, "Face Detection Started", Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                }
                 ACTION_RECORD_VIDEO -> handleVolumeAction("video")
                 ACTION_STOP_RECORDING -> cameraController.stopRecording()
                 ACTION_SWITCH_CAMERA -> cameraController.switchCamera()
@@ -98,7 +85,6 @@ class SpyCamService : LifecycleService() {
             addAction(ACTION_CAPTURE_BURST)
             addAction(ACTION_CAPTURE_AUTO)
             addAction(ACTION_STOP_AUTO)
-            addAction(ACTION_CAPTURE_FACE)
             addAction(ACTION_RECORD_VIDEO)
             addAction(ACTION_STOP_RECORDING)
             addAction(ACTION_SWITCH_CAMERA)
@@ -117,12 +103,6 @@ class SpyCamService : LifecycleService() {
         startSilentPlayer()
         setupVolumeKeyListener()
         startVolumeObserver()
-
-        cameraController.onFaceDetectedListener = {
-            if (!preferences.disableToast) {
-                Toast.makeText(applicationContext, "Face Detected - Photo Captured", Toast.LENGTH_SHORT).show()
-            }
-        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -443,20 +423,6 @@ class SpyCamService : LifecycleService() {
                 }
             }
 
-            findViewById<ImageButton>(R.id.btn_face)?.setOnClickListener {
-                if (cameraController.isFaceDetecting) {
-                    cameraController.stopFaceDetection()
-                    if (!preferences.disableToast) {
-                        Toast.makeText(applicationContext, "Face Detection Stopped", Toast.LENGTH_SHORT).show()
-                    }
-                } else {
-                    cameraController.startFaceDetection()
-                    if (!preferences.disableToast) {
-                        Toast.makeText(applicationContext, "Face Detection Started", Toast.LENGTH_SHORT).show()
-                    }
-                }
-            }
-
             findViewById<ImageButton>(R.id.btn_capture)?.setOnClickListener {
                 handleVolumeAction("capture")
             }
@@ -526,7 +492,6 @@ class SpyCamService : LifecycleService() {
         const val ACTION_CAPTURE_BURST = "com.awork.camera6.action.CAPTURE_BURST"
         const val ACTION_CAPTURE_AUTO = "com.awork.camera6.action.CAPTURE_AUTO"
         const val ACTION_STOP_AUTO = "com.awork.camera6.action.STOP_AUTO"
-        const val ACTION_CAPTURE_FACE = "com.awork.camera6.action.CAPTURE_FACE"
         const val ACTION_RECORD_VIDEO = "com.awork.camera6.action.RECORD_VIDEO"
         const val ACTION_STOP_RECORDING = "com.awork.camera6.action.STOP_RECORDING"
         const val ACTION_SWITCH_CAMERA = "com.awork.camera6.action.SWITCH_CAMERA"
