@@ -96,6 +96,16 @@ class SpyCamService : LifecycleService() {
         }
 
         cameraController.startCamera(this)
+        cameraController.onStateChangedListener = { state ->
+            val statusText = when (state) {
+                com.awork.camera6.camera.CameraState.Idle -> if (isOverlayVisible) "Camera active" else "Hidden mode"
+                com.awork.camera6.camera.CameraState.Capturing -> "Capturing photo..."
+                is com.awork.camera6.camera.CameraState.Burst -> "Burst (${state.current}/${state.total})"
+                com.awork.camera6.camera.CameraState.AutoCapturing -> "Auto capture active"
+                com.awork.camera6.camera.CameraState.Recording -> "Recording video..."
+            }
+            updateNotification(statusText)
+        }
 
         when (preferences.startMode) {
             "black" -> startBlackMode()
@@ -247,9 +257,9 @@ class SpyCamService : LifecycleService() {
         }
     }
 
-    private fun createNotification() = NotificationCompat.Builder(this, SCOSApplication.CHANNEL_ID)
+    private fun createNotification(statusText: String? = null) = NotificationCompat.Builder(this, SCOSApplication.CHANNEL_ID)
         .setContentTitle("SCOS")
-        .setContentText(if (isOverlayVisible) "Camera active" else "Hidden mode")
+        .setContentText(statusText ?: if (isOverlayVisible) "Camera active" else "Hidden mode")
         .setSmallIcon(android.R.drawable.ic_menu_camera)
         .setOngoing(true)
         .setContentIntent(PendingIntent.getActivity(
@@ -390,9 +400,9 @@ class SpyCamService : LifecycleService() {
         })
     }
 
-    private fun updateNotification() {
+    private fun updateNotification(statusText: String? = null) {
         val manager = getSystemService(NOTIFICATION_SERVICE) as android.app.NotificationManager
-        manager.notify(NOTIFICATION_ID, createNotification())
+        manager.notify(NOTIFICATION_ID, createNotification(statusText))
     }
 
     companion object {

@@ -26,6 +26,7 @@ class BlackScreenActivity : ComponentActivity() {
     private var cachedVolumeUpAction: String = "capture"
     private var cachedVolumeDownAction: String = "video"
     private lateinit var scaleDetector: ScaleGestureDetector
+    private lateinit var gestureDetector: android.view.GestureDetector
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -46,6 +47,15 @@ class BlackScreenActivity : ComponentActivity() {
                 return false
             }
         })
+        gestureDetector = android.view.GestureDetector(this, object : android.view.GestureDetector.SimpleOnGestureListener() {
+            override fun onDoubleTap(e: MotionEvent): Boolean {
+                com.awork.camera6.command.CaptureDispatcher.dispatch(
+                    this@BlackScreenActivity,
+                    com.awork.camera6.command.CaptureCommand.SINGLE_CAPTURE
+                )
+                return true
+            }
+        })
         setContentView(View(this).apply { setBackgroundColor(0xFF000000.toInt()) })
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
@@ -61,11 +71,10 @@ class BlackScreenActivity : ComponentActivity() {
     }
 
     override fun onTouchEvent(event: MotionEvent?): Boolean {
-        event?.let { scaleDetector.onTouchEvent(it) }
-        if (event?.action == MotionEvent.ACTION_UP) {
-            com.awork.camera6.command.CaptureDispatcher.dispatch(this, com.awork.camera6.command.CaptureCommand.SINGLE_CAPTURE)
-        }
-        return true
+        if (event == null) return super.onTouchEvent(event)
+        val scaleHandled = scaleDetector.onTouchEvent(event)
+        val gestureHandled = gestureDetector.onTouchEvent(event)
+        return scaleHandled || gestureHandled || super.onTouchEvent(event)
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {

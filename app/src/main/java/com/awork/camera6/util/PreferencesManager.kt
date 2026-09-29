@@ -12,11 +12,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import java.util.concurrent.ConcurrentHashMap
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "scos_prefs")
@@ -27,60 +28,76 @@ class PreferencesManager(private val context: Context) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val memoryCache = ConcurrentHashMap<Preferences.Key<*>, Any>()
 
+    private val _appPreferencesFlow = MutableStateFlow(AppPreferences())
+    val appPreferencesFlow: StateFlow<AppPreferences> = _appPreferencesFlow.asStateFlow()
+
     init {
         scope.launch {
             dataStore.data.collect { prefs ->
                 memoryCache.putAll(prefs.asMap())
+                _appPreferencesFlow.value = AppPreferences(
+                    burstCount = prefs[KEY_BURST_COUNT] ?: 5,
+                    autoDelay = prefs[KEY_AUTO_DELAY] ?: 3,
+                    startMode = prefs[KEY_START_MODE] ?: "normal",
+                    savePath = prefs[KEY_SAVE_PATH] ?: "",
+                    hideFolder = prefs[KEY_HIDE_FOLDER] ?: false,
+                    disableToast = prefs[KEY_DISABLE_TOAST] ?: false,
+                    disableShutter = prefs[KEY_DISABLE_SHUTTER] ?: true,
+                    disableVibration = prefs[KEY_DISABLE_VIBRATION] ?: false,
+                    volumeUpAction = prefs[KEY_VOLUME_UP_ACTION] ?: "capture",
+                    volumeDownAction = prefs[KEY_VOLUME_DOWN_ACTION] ?: "video",
+                    defaultCamera = prefs[KEY_DEFAULT_CAMERA] ?: "back"
+                )
             }
         }
     }
 
-    // Fast memory-cached property accessors (non-blocking disk persistence)
+    // Fast memory-cached property accessors (non-blocking, no runBlocking)
     var burstCount: Int
-        get() = getSync(KEY_BURST_COUNT, 5)
+        get() = (memoryCache[KEY_BURST_COUNT] as? Int) ?: _appPreferencesFlow.value.burstCount
         set(value) = putSync(KEY_BURST_COUNT, value)
 
     var autoDelay: Int
-        get() = getSync(KEY_AUTO_DELAY, 3)
+        get() = (memoryCache[KEY_AUTO_DELAY] as? Int) ?: _appPreferencesFlow.value.autoDelay
         set(value) = putSync(KEY_AUTO_DELAY, value)
 
     var startMode: String
-        get() = getSync(KEY_START_MODE, "normal")
+        get() = (memoryCache[KEY_START_MODE] as? String) ?: _appPreferencesFlow.value.startMode
         set(value) = putSync(KEY_START_MODE, value)
 
     var savePath: String
-        get() = getSync(KEY_SAVE_PATH, "")
+        get() = (memoryCache[KEY_SAVE_PATH] as? String) ?: _appPreferencesFlow.value.savePath
         set(value) = putSync(KEY_SAVE_PATH, value)
 
     var hideFolder: Boolean
-        get() = getSync(KEY_HIDE_FOLDER, false)
+        get() = (memoryCache[KEY_HIDE_FOLDER] as? Boolean) ?: _appPreferencesFlow.value.hideFolder
         set(value) = putSync(KEY_HIDE_FOLDER, value)
 
     var disableToast: Boolean
-        get() = getSync(KEY_DISABLE_TOAST, false)
+        get() = (memoryCache[KEY_DISABLE_TOAST] as? Boolean) ?: _appPreferencesFlow.value.disableToast
         set(value) = putSync(KEY_DISABLE_TOAST, value)
 
     var disableShutter: Boolean
-        get() = getSync(KEY_DISABLE_SHUTTER, true)
+        get() = (memoryCache[KEY_DISABLE_SHUTTER] as? Boolean) ?: _appPreferencesFlow.value.disableShutter
         set(value) = putSync(KEY_DISABLE_SHUTTER, value)
 
     var disableVibration: Boolean
-        get() = getSync(KEY_DISABLE_VIBRATION, false)
+        get() = (memoryCache[KEY_DISABLE_VIBRATION] as? Boolean) ?: _appPreferencesFlow.value.disableVibration
         set(value) = putSync(KEY_DISABLE_VIBRATION, value)
 
     var volumeUpAction: String
-        get() = getSync(KEY_VOLUME_UP_ACTION, "capture")
+        get() = (memoryCache[KEY_VOLUME_UP_ACTION] as? String) ?: _appPreferencesFlow.value.volumeUpAction
         set(value) = putSync(KEY_VOLUME_UP_ACTION, value)
 
     var volumeDownAction: String
-        get() = getSync(KEY_VOLUME_DOWN_ACTION, "video")
+        get() = (memoryCache[KEY_VOLUME_DOWN_ACTION] as? String) ?: _appPreferencesFlow.value.volumeDownAction
         set(value) = putSync(KEY_VOLUME_DOWN_ACTION, value)
 
     var defaultCamera: String
-        get() = getSync(KEY_DEFAULT_CAMERA, "back")
+        get() = (memoryCache[KEY_DEFAULT_CAMERA] as? String) ?: _appPreferencesFlow.value.defaultCamera
         set(value) = putSync(KEY_DEFAULT_CAMERA, value)
 
-    // Flow-based accessors (for reactive Compose UI with distinct emissions)
+    // Flow-based accessors for Compose UI
     fun burstCountFlow(): Flow<Int> = observe(KEY_BURST_COUNT, 5)
     fun autoDelayFlow(): Flow<Int> = observe(KEY_AUTO_DELAY, 3)
     fun startModeFlow(): Flow<String> = observe(KEY_START_MODE, "normal")
@@ -93,28 +110,10 @@ class PreferencesManager(private val context: Context) {
     fun volumeUpActionFlow(): Flow<String> = observe(KEY_VOLUME_UP_ACTION, "capture")
     fun volumeDownActionFlow(): Flow<String> = observe(KEY_VOLUME_DOWN_ACTION, "video")
 
-    // Generic helpers
     private fun <T> observe(key: Preferences.Key<T>, default: T): Flow<T> =
         dataStore.data
             .map { prefs -> prefs[key] ?: default }
             .distinctUntilChanged()
-
-    @Suppress("UNCHECKED_CAST")
-    private fun <T> getSync(key: Preferences.Key<T>, default: T): T {
-        val cached = memoryCache[key]
-        if (cached != null) {
-            return cached as T
-        }
-        return try {
-            runBlocking(Dispatchers.IO) {
-                val pref = dataStore.data.first()[key] ?: default
-                memoryCache[key] = pref as Any
-                pref
-            }
-        } catch (e: Exception) {
-            default
-        }
-    }
 
     private fun <T> putSync(key: Preferences.Key<T>, value: T) {
         memoryCache[key] = value as Any
