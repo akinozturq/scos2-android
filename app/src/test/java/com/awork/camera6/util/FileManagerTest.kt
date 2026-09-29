@@ -58,4 +58,13 @@ class FileManagerTest {
     fun `SCOS_DIR constant is correct`() {
         assertThat(FileManager.SCOS_DIR).isEqualTo("SCOS")
     }
+
+    @Test
+    fun `getCleanFolderName sanitizes input properly`() {
+        assertThat(FileManager.getCleanFolderName("")).isEqualTo("SCOS")
+        assertThat(FileManager.getCleanFolderName("   ")).isEqualTo("SCOS")
+        assertThat(FileManager.getCleanFolderName("MyPhotos")).isEqualTo("MyPhotos")
+        assertThat(FileManager.getCleanFolderName("nested/folder/MyPhotos")).isEqualTo("MyPhotos")
+        assertThat(FileManager.getCleanFolderName("nested\\folder\\MyPhotos")).isEqualTo("MyPhotos")
+    }
 }

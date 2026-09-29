@@ -36,11 +36,11 @@ class MainActivity : ComponentActivity() {
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
-        val allGranted = permissions.values.all { it }
-        if (allGranted) {
+        val cameraGranted = permissions[Manifest.permission.CAMERA] == true
+        if (cameraGranted) {
             requestOverlayPermission()
         } else {
-            Toast.makeText(this, "Permissions required", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Camera permission is required", Toast.LENGTH_LONG).show()
             finish()
         }
     }
@@ -72,22 +72,23 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun checkPermissions(): Boolean {
-        val permissions = mutableListOf(
-            Manifest.permission.CAMERA,
-            Manifest.permission.RECORD_AUDIO
-        )
-        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P) {
-            permissions.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        val permissions = mutableListOf(Manifest.permission.CAMERA)
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            permissions.add(Manifest.permission.RECORD_AUDIO)
         }
+        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+                permissions.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            }
+        }
+        val cameraGranted = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
         val missing = permissions.filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }
-        return if (missing.isEmpty()) {
-            true
-        } else {
+        if (missing.isNotEmpty()) {
             requestPermissionLauncher.launch(missing.toTypedArray())
-            false
         }
+        return cameraGranted
     }
 
     private fun requestOverlayPermission() {

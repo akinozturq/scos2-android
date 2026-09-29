@@ -6,40 +6,57 @@ import java.io.File
 
 class FileManager(private val context: Context) {
 
-    fun getSaveDirectory(customPath: String = "", hidden: Boolean = false): File {
-        if (hidden) {
-            return getHiddenDirectory()
-        }
-        val basePath = customPath.ifBlank {
-            try {
-                val picturesDir = Environment.getExternalStoragePublicDirectory(
-                    Environment.DIRECTORY_PICTURES
-                )
-                File(picturesDir, SCOS_DIR).absolutePath
-            } catch (e: Exception) {
-                context.getExternalFilesDir(Environment.DIRECTORY_PICTURES)?.absolutePath
-                    ?: context.filesDir.absolutePath
-            }
-        }
-        val dir = File(basePath)
-        if (!dir.exists()) dir.mkdirs()
-        return dir
+    fun getPhotoSaveDirectory(customPath: String = "", hidden: Boolean = false): File {
+        return getDirectory(Environment.DIRECTORY_PICTURES, customPath, hidden)
     }
 
-    fun getHiddenDirectory(): File {
-        val baseDir = context.getExternalFilesDir(Environment.DIRECTORY_PICTURES) ?: context.filesDir
-        val dir = File(baseDir, "Hidden")
-        if (!dir.exists()) dir.mkdirs()
-        toggleHidden(dir, true)
-        return dir
+    fun getVideoSaveDirectory(customPath: String = "", hidden: Boolean = false): File {
+        return getDirectory(Environment.DIRECTORY_MOVIES, customPath, hidden)
     }
+
+    fun getSaveDirectory(customPath: String = "", hidden: Boolean = false): File {
+        return getPhotoSaveDirectory(customPath, hidden)
+    }
+
+    private fun getDirectory(type: String, customPath: String, hidden: Boolean): File {
+        val folderName = getCleanFolderName(customPath)
+
+        val targetDir = if (hidden) {
+            val basePrivate = context.getExternalFilesDir(type) ?: context.filesDir
+            val subDir = if (folderName.isNotBlank() && folderName != SCOS_DIR) {
+                File(File(basePrivate, "Hidden"), folderName)
+            } else {
+                File(basePrivate, "Hidden")
+            }
+            if (!subDir.exists()) subDir.mkdirs()
+            toggleHidden(subDir, true)
+            subDir
+        } else {
+            val basePublic = try {
+                Environment.getExternalStoragePublicDirectory(type)
+            } catch (e: Exception) {
+                context.getExternalFilesDir(type) ?: context.filesDir
+            }
+            val dir = File(basePublic, folderName)
+            if (!dir.exists()) dir.mkdirs()
+            dir
+        }
+
+        return targetDir
+    }
+
+    fun getCleanFolderName(customPath: String): String = Companion.getCleanFolderName(customPath)
 
     fun toggleHidden(dir: File, hide: Boolean) {
         val nomedia = File(dir, ".nomedia")
-        if (hide && !nomedia.exists()) {
-            nomedia.createNewFile()
-        } else if (!hide && nomedia.exists()) {
-            nomedia.delete()
+        try {
+            if (hide && !nomedia.exists()) {
+                nomedia.createNewFile()
+            } else if (!hide && nomedia.exists()) {
+                nomedia.delete()
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 
@@ -49,5 +66,11 @@ class FileManager(private val context: Context) {
 
     companion object {
         const val SCOS_DIR = "SCOS"
+
+        fun getCleanFolderName(customPath: String): String {
+            val sanitized = customPath.trim().replace("\\", "/").trim('/')
+            val lastSegment = sanitized.substringAfterLast('/')
+            return if (lastSegment.isNotBlank()) lastSegment else SCOS_DIR
+        }
     }
 }

@@ -18,6 +18,7 @@ import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.Preview
 import androidx.camera.core.UseCase
 import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.video.FallbackStrategy
 import androidx.camera.video.FileOutputOptions
 import androidx.camera.video.MediaStoreOutputOptions
 import androidx.camera.video.Quality
@@ -28,7 +29,6 @@ import androidx.camera.video.VideoCapture
 import androidx.camera.video.VideoRecordEvent
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
-import androidx.core.content.FileProvider
 import androidx.lifecycle.LifecycleOwner
 import com.awork.camera6.util.FileManager
 import com.awork.camera6.util.PreferencesManager
@@ -59,11 +59,14 @@ class CameraController(
     private var mediaActionSound: MediaActionSound? = null
 
     @Volatile
-    var isRecording = false
+    var currentState: CameraState = CameraState.Idle
         private set
-    @Volatile
-    var isAutoCapturing = false
-        private set
+
+    val isRecording: Boolean get() = currentState is CameraState.Recording
+    val isAutoCapturing: Boolean get() = currentState is CameraState.AutoCapturing
+
+    var onStateChangedListener: ((CameraState) -> Unit)? = null
+    var onResultListener: ((CameraResult) -> Unit)? = null
 
     init {
         isFrontCamera = preferences.defaultCamera.equals("front", ignoreCase = true)
@@ -72,6 +75,11 @@ class CameraController(
         } else {
             CameraSelector.DEFAULT_BACK_CAMERA
         }
+    }
+
+    private fun updateState(newState: CameraState) {
+        currentState = newState
+        mainHandler.post { onStateChangedListener?.invoke(newState) }
     }
 
     fun setPreviewView(view: PreviewView?) {
@@ -91,6 +99,9 @@ class CameraController(
                 bindUseCases()
             } catch (e: Exception) {
                 e.printStackTrace()
+                onResultListener?.invoke(
+                    CameraResult.Failure(CameraError.InitializationFailed("Failed to initialize camera provider", e))
+                )
             }
         }, ContextCompat.getMainExecutor(context))
     }
@@ -124,6 +135,9 @@ class CameraController(
             )
         } catch (e: Exception) {
             e.printStackTrace()
+            onResultListener?.invoke(
+                CameraResult.Failure(CameraError.InitializationFailed("Failed to bind use cases", e))
+            )
         }
     }
 
@@ -143,24 +157,38 @@ class CameraController(
         bindUseCases()
     }
 
-    fun captureSingle() {
-        if (isRecording) return // Mutex: don't take photo while recording video
+    fun captureSingle(onComplete: ((Boolean) -> Unit)? = null) {
+        if (isRecording) {
+            onResultListener?.invoke(
+                CameraResult.Failure(CameraError.StateConflict(currentState, "captureSingle"))
+            )
+            onComplete?.invoke(false)
+            return
+        }
 
         val capture = imageCapture ?: run {
             bindUseCases()
-            imageCapture ?: return
+            imageCapture ?: run {
+                onComplete?.invoke(false)
+                return
+            }
+        }
+
+        if (currentState is CameraState.Idle) {
+            updateState(CameraState.Capturing)
         }
 
         val timestamp = SimpleDateFormat("yyyyMMdd_HHmmssSSS", Locale.US).format(Date())
         val isHidden = preferences.hideFolder
+        val fileName = "IMG_$timestamp.jpg"
 
         triggerHapticAndSound()
 
         val outputOptions: ImageCapture.OutputFileOptions = if (!isHidden && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val subDir = fileManager.getCleanFolderName(preferences.savePath)
             val contentValues = ContentValues().apply {
-                put(MediaStore.MediaColumns.DISPLAY_NAME, "IMG_$timestamp.jpg")
+                put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
                 put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
-                val subDir = if (preferences.savePath.isNotBlank()) preferences.savePath else FileManager.SCOS_DIR
                 put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/$subDir")
             }
             ImageCapture.OutputFileOptions.Builder(
@@ -169,8 +197,8 @@ class CameraController(
                 contentValues
             ).build()
         } else {
-            val saveDir = fileManager.getSaveDirectory(preferences.savePath, hidden = isHidden)
-            val file = File(saveDir, "IMG_$timestamp.jpg")
+            val saveDir = fileManager.getPhotoSaveDirectory(preferences.savePath, hidden = isHidden)
+            val file = File(saveDir, fileName)
             ImageCapture.OutputFileOptions.Builder(file).build()
         }
 
@@ -179,66 +207,106 @@ class CameraController(
             cameraExecutor,
             object : ImageCapture.OnImageSavedCallback {
                 override fun onImageSaved(output: ImageCapture.OutputFileResults) {
+                    if (currentState is CameraState.Capturing) {
+                        updateState(CameraState.Idle)
+                    }
+
+                    val savedUri = output.savedUri
+                    val uriString = savedUri?.toString() ?: ""
+                    var filePath: String? = null
+
                     if (isHidden || Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-                        val file = File(fileManager.getSaveDirectory(preferences.savePath, hidden = isHidden), "IMG_$timestamp.jpg")
+                        val file = File(fileManager.getPhotoSaveDirectory(preferences.savePath, hidden = isHidden), fileName)
+                        filePath = file.absolutePath
                         if (file.exists() && !isHidden) {
                             notifyMediaScanner(file)
                         }
                     }
+
+                    mainHandler.post {
+                        onResultListener?.invoke(CameraResult.PhotoSuccess(uriString, filePath))
+                        onComplete?.invoke(true)
+                    }
                 }
 
                 override fun onError(exception: ImageCaptureException) {
-                    exception.printStackTrace()
+                    if (currentState is CameraState.Capturing) {
+                        updateState(CameraState.Idle)
+                    }
+                    mainHandler.post {
+                        onResultListener?.invoke(
+                            CameraResult.Failure(CameraError.CaptureFailed(exception.message ?: "Capture failed", exception))
+                        )
+                        onComplete?.invoke(false)
+                    }
                 }
             }
         )
     }
 
     fun captureBurst(count: Int) {
-        if (isRecording || isAutoCapturing) return // Mutex
+        if (isRecording || isAutoCapturing) return
+        val total = count.coerceAtLeast(1)
+        updateState(CameraState.Burst(1, total))
 
-        var remaining = count
-        val burstRunnable = object : Runnable {
-            override fun run() {
-                if (remaining > 0 && !isRecording) {
-                    captureSingle()
-                    remaining--
-                    mainHandler.postDelayed(this, 400)
+        fun executeNext(current: Int) {
+            if (currentState !is CameraState.Burst) return
+            updateState(CameraState.Burst(current, total))
+            captureSingle { _ ->
+                if (currentState !is CameraState.Burst) return@captureSingle
+                if (current < total) {
+                    mainHandler.postDelayed({
+                        if (currentState is CameraState.Burst) {
+                            executeNext(current + 1)
+                        }
+                    }, 400L)
+                } else {
+                    updateState(CameraState.Idle)
                 }
             }
         }
-        mainHandler.post(burstRunnable)
+
+        executeNext(1)
     }
 
     fun startAutoCapture(delaySeconds: Int) {
-        if (isRecording) return // Mutex: cannot start auto capture during video recording
+        if (isRecording) return
 
         if (isAutoCapturing) {
             stopAutoCapture()
             return
         }
 
-        isAutoCapturing = true
+        updateState(CameraState.AutoCapturing)
         val intervalMs = (delaySeconds.coerceAtLeast(1)) * 1000L
-        autoCaptureRunnable = object : Runnable {
-            override fun run() {
-                if (isAutoCapturing && !isRecording) {
-                    captureSingle()
-                    mainHandler.postDelayed(this, intervalMs)
+
+        fun scheduleNext() {
+            if (currentState !is CameraState.AutoCapturing) return
+            captureSingle {
+                if (currentState is CameraState.AutoCapturing) {
+                    autoCaptureRunnable = Runnable {
+                        if (currentState is CameraState.AutoCapturing) {
+                            scheduleNext()
+                        }
+                    }
+                    mainHandler.postDelayed(autoCaptureRunnable!!, intervalMs)
                 }
             }
         }
-        mainHandler.post(autoCaptureRunnable!!)
+
+        scheduleNext()
     }
 
     fun stopAutoCapture() {
-        isAutoCapturing = false
         autoCaptureRunnable?.let { mainHandler.removeCallbacks(it) }
         autoCaptureRunnable = null
+        if (currentState is CameraState.AutoCapturing) {
+            updateState(CameraState.Idle)
+        }
     }
 
     fun startRecording() {
-        if (isAutoCapturing) return // Mutex: cannot start video recording during auto capture
+        if (isAutoCapturing) return
 
         if (isRecording) {
             stopRecording()
@@ -252,7 +320,12 @@ class CameraController(
             provider.unbindAll()
 
             val recorder = Recorder.Builder()
-                .setQualitySelector(QualitySelector.from(Quality.HIGHEST))
+                .setQualitySelector(
+                    QualitySelector.fromOrderedList(
+                        listOf(Quality.FHD, Quality.HD, Quality.SD),
+                        FallbackStrategy.lowerQualityOrHigherThan(Quality.SD)
+                    )
+                )
                 .build()
             videoCapture = VideoCapture.withOutput(recorder)
 
@@ -275,12 +348,13 @@ class CameraController(
 
             val timestamp = SimpleDateFormat("yyyyMMdd_HHmmssSSS", Locale.US).format(Date())
             val isHidden = preferences.hideFolder
+            val fileName = "VID_$timestamp.mp4"
 
             val pendingRecording = if (!isHidden && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val subDir = fileManager.getCleanFolderName(preferences.savePath)
                 val videoContentValues = ContentValues().apply {
-                    put(MediaStore.MediaColumns.DISPLAY_NAME, "VID_$timestamp.mp4")
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
                     put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4")
-                    val subDir = if (preferences.savePath.isNotBlank()) preferences.savePath else FileManager.SCOS_DIR
                     put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/$subDir")
                 }
                 val mediaStoreOutput = MediaStoreOutputOptions.Builder(
@@ -289,8 +363,8 @@ class CameraController(
                 ).setContentValues(videoContentValues).build()
                 videoCapture?.output?.prepareRecording(context, mediaStoreOutput)
             } else {
-                val videoDir = fileManager.getSaveDirectory(preferences.savePath, hidden = isHidden)
-                val videoFile = File(videoDir, "VID_$timestamp.mp4")
+                val videoDir = fileManager.getVideoSaveDirectory(preferences.savePath, hidden = isHidden)
+                val videoFile = File(videoDir, fileName)
                 val fileOutputOptions = FileOutputOptions.Builder(videoFile).build()
                 videoCapture?.output?.prepareRecording(context, fileOutputOptions)
             }
@@ -304,26 +378,40 @@ class CameraController(
             activeRecording = recordingWithAudio?.start(ContextCompat.getMainExecutor(context)) { recordEvent ->
                 when (recordEvent) {
                     is VideoRecordEvent.Finalize -> {
-                        isRecording = false
+                        updateState(CameraState.Idle)
+                        if (recordEvent.hasError()) {
+                            onResultListener?.invoke(
+                                CameraResult.Failure(CameraError.RecordingFailed(
+                                    recordEvent.cause?.message ?: "Video recording error ${recordEvent.error}",
+                                    recordEvent.cause
+                                ))
+                            )
+                        } else {
+                            onResultListener?.invoke(
+                                CameraResult.VideoSuccess(recordEvent.outputResults.outputUri.toString())
+                            )
+                        }
                         bindUseCases()
                     }
                 }
             }
 
-            isRecording = true
+            updateState(CameraState.Recording)
             triggerHapticAndSound()
         } catch (e: Exception) {
             e.printStackTrace()
-            isRecording = false
+            updateState(CameraState.Idle)
+            onResultListener?.invoke(
+                CameraResult.Failure(CameraError.RecordingFailed("Failed to start recording", e))
+            )
             bindUseCases()
         }
     }
 
     fun stopRecording() {
-        if (!isRecording) return
+        if (currentState !is CameraState.Recording) return
         activeRecording?.stop()
         activeRecording = null
-        isRecording = false
     }
 
     private fun triggerHapticAndSound() {
@@ -367,6 +455,7 @@ class CameraController(
             mediaActionSound = null
             cameraExecutor.shutdown()
             cameraProvider?.unbindAll()
+            updateState(CameraState.Idle)
         } catch (e: Exception) {
             e.printStackTrace()
         }
