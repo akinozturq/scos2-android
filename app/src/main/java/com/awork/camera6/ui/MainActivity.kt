@@ -126,18 +126,13 @@ class MainActivity : ComponentActivity() {
         val isDown = event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN
         if (isUp || isDown) {
             val action = if (isUp) cachedVolumeUpAction else cachedVolumeDownAction
-            if (action != "none") {
+            val command = com.awork.camera6.command.CaptureCommand.fromPreferenceAction(action)
+            if (command != null) {
                 if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
-                    if (action == "black") {
+                    if (command == com.awork.camera6.command.CaptureCommand.BLACK_MODE) {
                         startActivity(Intent(this, BlackScreenActivity::class.java))
                     } else {
-                        val intentAction = when (action) {
-                            "burst" -> SpyCamService.ACTION_CAPTURE_BURST
-                            "auto" -> SpyCamService.ACTION_CAPTURE_AUTO
-                            "video" -> SpyCamService.ACTION_RECORD_VIDEO
-                            else -> SpyCamService.ACTION_CAPTURE_SINGLE
-                        }
-                        sendBroadcast(Intent(intentAction).setPackage(packageName))
+                        com.awork.camera6.command.CaptureDispatcher.dispatch(this, command)
                     }
                 }
                 return true // Consume BOTH ACTION_DOWN and ACTION_UP

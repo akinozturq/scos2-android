@@ -2,14 +2,11 @@ package com.awork.camera6
 
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
-import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ServiceInfo
-import android.database.ContentObserver
 import android.graphics.PixelFormat
-import android.media.AudioManager
 import android.media.MediaPlayer
 import android.media.VolumeProvider
 import android.media.session.MediaSession
@@ -28,6 +25,7 @@ import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import androidx.lifecycle.LifecycleService
 import com.awork.camera6.camera.CameraController
+import com.awork.camera6.command.CaptureCommand
 import com.awork.camera6.ui.BlackScreenActivity
 import com.awork.camera6.ui.MainActivity
 import com.awork.camera6.util.PreferencesManager
@@ -41,39 +39,18 @@ class SpyCamService : LifecycleService() {
     lateinit var cameraController: CameraController
     @Inject
     lateinit var preferences: PreferencesManager
+
     private var overlayView: View? = null
     private var isOverlayVisible = false
     private var mediaSession: MediaSession? = null
     private var silentPlayer: MediaPlayer? = null
-    private var volumeObserver: ContentObserver? = null
-
-    private val monitoredStreams = intArrayOf(
-        AudioManager.STREAM_MUSIC,
-        AudioManager.STREAM_RING,
-        AudioManager.STREAM_NOTIFICATION,
-        AudioManager.STREAM_SYSTEM,
-        10 // STREAM_ACCESSIBILITY / Xiaomi stream
-    )
-    private val previousStreamVolumes = IntArray(monitoredStreams.size) { -1 }
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private val commandReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
-            when (intent.action) {
-                ACTION_CAPTURE_SINGLE -> handleVolumeAction("capture")
-                ACTION_CAPTURE_BURST -> handleVolumeAction("burst")
-                ACTION_CAPTURE_AUTO -> handleVolumeAction("auto")
-                ACTION_STOP_AUTO -> cameraController.stopAutoCapture()
-                ACTION_RECORD_VIDEO -> handleVolumeAction("video")
-                ACTION_STOP_RECORDING -> cameraController.stopRecording()
-                ACTION_SWITCH_CAMERA -> cameraController.switchCamera()
-                ACTION_SHOW_OVERLAY -> showOverlay()
-                ACTION_HIDE_OVERLAY -> hideOverlay()
-                ACTION_TOGGLE_OVERLAY -> toggleOverlay()
-                ACTION_BLACK_MODE -> startBlackMode()
-                ACTION_EXIT -> stopSelf()
-            }
+            val command = CaptureCommand.fromAction(intent.action) ?: return
+            executeCommand(command)
         }
     }
 
@@ -81,18 +58,18 @@ class SpyCamService : LifecycleService() {
         super.onCreate()
 
         val filter = IntentFilter().apply {
-            addAction(ACTION_CAPTURE_SINGLE)
-            addAction(ACTION_CAPTURE_BURST)
-            addAction(ACTION_CAPTURE_AUTO)
-            addAction(ACTION_STOP_AUTO)
-            addAction(ACTION_RECORD_VIDEO)
-            addAction(ACTION_STOP_RECORDING)
-            addAction(ACTION_SWITCH_CAMERA)
-            addAction(ACTION_SHOW_OVERLAY)
-            addAction(ACTION_HIDE_OVERLAY)
-            addAction(ACTION_TOGGLE_OVERLAY)
-            addAction(ACTION_BLACK_MODE)
-            addAction(ACTION_EXIT)
+            addAction(CaptureCommand.ACTION_CAPTURE_SINGLE)
+            addAction(CaptureCommand.ACTION_CAPTURE_BURST)
+            addAction(CaptureCommand.ACTION_CAPTURE_AUTO)
+            addAction(CaptureCommand.ACTION_STOP_AUTO)
+            addAction(CaptureCommand.ACTION_RECORD_VIDEO)
+            addAction(CaptureCommand.ACTION_STOP_RECORDING)
+            addAction(CaptureCommand.ACTION_SWITCH_CAMERA)
+            addAction(CaptureCommand.ACTION_SHOW_OVERLAY)
+            addAction(CaptureCommand.ACTION_HIDE_OVERLAY)
+            addAction(CaptureCommand.ACTION_TOGGLE_OVERLAY)
+            addAction(CaptureCommand.ACTION_BLACK_MODE)
+            addAction(CaptureCommand.ACTION_EXIT)
         }
         registerReceiver(
             commandReceiver, 
@@ -102,7 +79,6 @@ class SpyCamService : LifecycleService() {
 
         startSilentPlayer()
         setupVolumeKeyListener()
-        startVolumeObserver()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -127,7 +103,7 @@ class SpyCamService : LifecycleService() {
             else -> showOverlay()
         }
 
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
     override fun onBind(intent: Intent): IBinder? {
@@ -141,7 +117,6 @@ class SpyCamService : LifecycleService() {
         } catch (e: Exception) {
             e.printStackTrace()
         }
-        stopVolumeObserver()
         stopSilentPlayer()
         try {
             mediaSession?.isActive = false
@@ -179,11 +154,6 @@ class SpyCamService : LifecycleService() {
 
     private fun setupVolumeKeyListener() {
         try {
-            val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-            val componentName = ComponentName(this, RemoteControlReceiver::class.java)
-            @Suppress("DEPRECATION")
-            audioManager.registerMediaButtonEventReceiver(componentName)
-
             mediaSession = MediaSession(this, "SCOS_VolumeKey_Session").apply {
                 setPlaybackState(
                     PlaybackState.Builder()
@@ -201,8 +171,9 @@ class SpyCamService : LifecycleService() {
                             preferences.volumeDownAction
                         } else null
 
-                        if (action != null && action != "none") {
-                            handleVolumeAction(action)
+                        val command = action?.let { CaptureCommand.fromPreferenceAction(it) }
+                        if (command != null) {
+                            executeCommand(command)
                         }
                     }
                 })
@@ -213,119 +184,47 @@ class SpyCamService : LifecycleService() {
         }
     }
 
-    private fun startVolumeObserver() {
-        try {
-            val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-            for (i in monitoredStreams.indices) {
-                try {
-                    val stream = monitoredStreams[i]
-                    val max = audioManager.getStreamMaxVolume(stream)
-                    var curr = audioManager.getStreamVolume(stream)
-                    // Keep volume in middle range so volume up and volume down always produce delta
-                    if (curr <= 0) {
-                        curr = 2
-                        audioManager.setStreamVolume(stream, curr, 0)
-                    } else if (curr >= max) {
-                        curr = max - 2
-                        audioManager.setStreamVolume(stream, curr, 0)
-                    }
-                    previousStreamVolumes[i] = curr
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
-            }
-
-            volumeObserver = object : ContentObserver(mainHandler) {
-                override fun onChange(selfChange: Boolean) {
-                    super.onChange(selfChange)
-                    for (i in monitoredStreams.indices) {
-                        val stream = monitoredStreams[i]
-                        try {
-                            val curr = audioManager.getStreamVolume(stream)
-                            val prev = previousStreamVolumes[i]
-                            if (prev != -1 && curr != prev) {
-                                val delta = curr - prev
-                                val action = if (delta > 0) preferences.volumeUpAction else preferences.volumeDownAction
-                                if (action != "none") {
-                                    handleVolumeAction(action)
-                                    try {
-                                        audioManager.setStreamVolume(stream, prev, 0)
-                                    } catch (e: Exception) {
-                                        previousStreamVolumes[i] = curr
-                                    }
-                                } else {
-                                    previousStreamVolumes[i] = curr
-                                }
-                                break
-                            }
-                        } catch (e: Exception) {
-                            e.printStackTrace()
-                        }
-                    }
-                }
-            }
-
-            contentResolver.registerContentObserver(
-                Settings.System.CONTENT_URI,
-                true,
-                volumeObserver!!
-            )
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-    }
-
-    private fun stopVolumeObserver() {
-        volumeObserver?.let {
-            try {
-                contentResolver.unregisterContentObserver(it)
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-            volumeObserver = null
-        }
-        try {
-            val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-            val componentName = ComponentName(this, RemoteControlReceiver::class.java)
-            @Suppress("DEPRECATION")
-            audioManager.unregisterMediaButtonEventReceiver(componentName)
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-    }
-
-    private fun handleVolumeAction(action: String) {
+    fun executeCommand(command: CaptureCommand) {
         mainHandler.post {
             if (!preferences.disableToast) {
-                val label = when (action) {
-                    "capture" -> "Photo Captured"
-                    "burst" -> "Burst Shot Started"
-                    "auto" -> if (cameraController.isAutoCapturing) "Continuous Shot Stopped" else "Continuous Shot Started"
-                    "video" -> if (cameraController.isRecording) "Video Stopped" else "Video Recording Started"
-                    "black" -> "Black Screen Mode"
-                    else -> action
+                val label = when (command) {
+                    CaptureCommand.SINGLE_CAPTURE -> "Photo Captured"
+                    CaptureCommand.BURST_CAPTURE -> "Burst Shot Started"
+                    CaptureCommand.AUTO_CAPTURE -> if (cameraController.isAutoCapturing) "Continuous Shot Stopped" else "Continuous Shot Started"
+                    CaptureCommand.STOP_AUTO_CAPTURE -> "Continuous Shot Stopped"
+                    CaptureCommand.RECORD_VIDEO -> if (cameraController.isRecording) "Video Stopped" else "Video Recording Started"
+                    CaptureCommand.STOP_RECORDING -> "Video Stopped"
+                    CaptureCommand.SWITCH_CAMERA -> "Camera Switched"
+                    CaptureCommand.SHOW_OVERLAY -> "Overlay Shown"
+                    CaptureCommand.HIDE_OVERLAY -> "Overlay Hidden"
+                    CaptureCommand.TOGGLE_OVERLAY -> "Overlay Toggled"
+                    CaptureCommand.BLACK_MODE -> "Black Screen Mode"
+                    CaptureCommand.EXIT -> "Exiting SCOS"
                 }
                 Toast.makeText(applicationContext, label, Toast.LENGTH_SHORT).show()
             }
         }
 
-        when (action) {
-            "capture" -> {
+        when (command) {
+            CaptureCommand.SINGLE_CAPTURE -> {
                 if (!cameraController.isRecording && !cameraController.isAutoCapturing) {
                     cameraController.captureSingle()
                 }
             }
-            "burst" -> {
+            CaptureCommand.BURST_CAPTURE -> {
                 if (!cameraController.isRecording && !cameraController.isAutoCapturing) {
                     cameraController.captureBurst(preferences.burstCount)
                 }
             }
-            "auto" -> {
+            CaptureCommand.AUTO_CAPTURE -> {
                 if (!cameraController.isRecording) {
                     cameraController.startAutoCapture(preferences.autoDelay)
                 }
             }
-            "video" -> {
+            CaptureCommand.STOP_AUTO_CAPTURE -> {
+                cameraController.stopAutoCapture()
+            }
+            CaptureCommand.RECORD_VIDEO -> {
                 if (!cameraController.isAutoCapturing) {
                     if (cameraController.isRecording) {
                         cameraController.stopRecording()
@@ -334,7 +233,17 @@ class SpyCamService : LifecycleService() {
                     }
                 }
             }
-            "black" -> startBlackMode()
+            CaptureCommand.STOP_RECORDING -> {
+                cameraController.stopRecording()
+            }
+            CaptureCommand.SWITCH_CAMERA -> {
+                cameraController.switchCamera()
+            }
+            CaptureCommand.SHOW_OVERLAY -> showOverlay()
+            CaptureCommand.HIDE_OVERLAY -> hideOverlay()
+            CaptureCommand.TOGGLE_OVERLAY -> toggleOverlay()
+            CaptureCommand.BLACK_MODE -> startBlackMode()
+            CaptureCommand.EXIT -> stopSelf()
         }
     }
 
@@ -349,7 +258,7 @@ class SpyCamService : LifecycleService() {
         ))
         .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Exit",
             PendingIntent.getBroadcast(this, 1,
-                Intent(ACTION_EXIT).apply { setPackage(packageName) }, PendingIntent.FLAG_IMMUTABLE))
+                Intent(CaptureCommand.ACTION_EXIT).apply { setPackage(packageName) }, PendingIntent.FLAG_IMMUTABLE))
         .build()
 
     private fun showOverlay() {
@@ -424,25 +333,25 @@ class SpyCamService : LifecycleService() {
             }
 
             findViewById<ImageButton>(R.id.btn_capture)?.setOnClickListener {
-                handleVolumeAction("capture")
+                executeCommand(CaptureCommand.SINGLE_CAPTURE)
             }
             findViewById<ImageButton>(R.id.btn_burst)?.setOnClickListener {
-                handleVolumeAction("burst")
+                executeCommand(CaptureCommand.BURST_CAPTURE)
             }
             findViewById<ImageButton>(R.id.btn_video)?.setOnClickListener {
-                handleVolumeAction("video")
+                executeCommand(CaptureCommand.RECORD_VIDEO)
             }
             findViewById<ImageButton>(R.id.btn_switch)?.setOnClickListener {
-                cameraController.switchCamera()
+                executeCommand(CaptureCommand.SWITCH_CAMERA)
             }
             findViewById<ImageButton>(R.id.btn_black)?.setOnClickListener {
-                startBlackMode()
+                executeCommand(CaptureCommand.BLACK_MODE)
             }
             findViewById<ImageButton>(R.id.btn_hide)?.setOnClickListener {
-                hideOverlay()
+                executeCommand(CaptureCommand.HIDE_OVERLAY)
             }
             findViewById<ImageButton>(R.id.btn_exit)?.setOnClickListener {
-                stopSelf()
+                executeCommand(CaptureCommand.EXIT)
             }
         }
 
@@ -488,17 +397,17 @@ class SpyCamService : LifecycleService() {
 
     companion object {
         const val NOTIFICATION_ID = 1001
-        const val ACTION_CAPTURE_SINGLE = "com.awork.camera6.action.CAPTURE_SINGLE"
-        const val ACTION_CAPTURE_BURST = "com.awork.camera6.action.CAPTURE_BURST"
-        const val ACTION_CAPTURE_AUTO = "com.awork.camera6.action.CAPTURE_AUTO"
-        const val ACTION_STOP_AUTO = "com.awork.camera6.action.STOP_AUTO"
-        const val ACTION_RECORD_VIDEO = "com.awork.camera6.action.RECORD_VIDEO"
-        const val ACTION_STOP_RECORDING = "com.awork.camera6.action.STOP_RECORDING"
-        const val ACTION_SWITCH_CAMERA = "com.awork.camera6.action.SWITCH_CAMERA"
-        const val ACTION_SHOW_OVERLAY = "com.awork.camera6.action.SHOW_OVERLAY"
-        const val ACTION_HIDE_OVERLAY = "com.awork.camera6.action.HIDE_OVERLAY"
-        const val ACTION_TOGGLE_OVERLAY = "com.awork.camera6.action.TOGGLE_OVERLAY"
-        const val ACTION_BLACK_MODE = "com.awork.camera6.action.BLACK_MODE"
-        const val ACTION_EXIT = "com.awork.camera6.action.EXIT"
+        const val ACTION_CAPTURE_SINGLE = CaptureCommand.ACTION_CAPTURE_SINGLE
+        const val ACTION_CAPTURE_BURST = CaptureCommand.ACTION_CAPTURE_BURST
+        const val ACTION_CAPTURE_AUTO = CaptureCommand.ACTION_CAPTURE_AUTO
+        const val ACTION_STOP_AUTO = CaptureCommand.ACTION_STOP_AUTO
+        const val ACTION_RECORD_VIDEO = CaptureCommand.ACTION_RECORD_VIDEO
+        const val ACTION_STOP_RECORDING = CaptureCommand.ACTION_STOP_RECORDING
+        const val ACTION_SWITCH_CAMERA = CaptureCommand.ACTION_SWITCH_CAMERA
+        const val ACTION_SHOW_OVERLAY = CaptureCommand.ACTION_SHOW_OVERLAY
+        const val ACTION_HIDE_OVERLAY = CaptureCommand.ACTION_HIDE_OVERLAY
+        const val ACTION_TOGGLE_OVERLAY = CaptureCommand.ACTION_TOGGLE_OVERLAY
+        const val ACTION_BLACK_MODE = CaptureCommand.ACTION_BLACK_MODE
+        const val ACTION_EXIT = CaptureCommand.ACTION_EXIT
     }
 }

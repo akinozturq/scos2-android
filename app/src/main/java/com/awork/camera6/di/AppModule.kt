@@ -28,7 +28,6 @@ object AppModule {
     ): FileManager = FileManager(context)
 
     @Provides
-    @Singleton
     fun provideCameraController(
         @ApplicationContext context: Context,
         preferencesManager: PreferencesManager,

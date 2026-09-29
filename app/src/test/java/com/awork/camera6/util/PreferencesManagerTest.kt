@@ -33,7 +33,6 @@ class PreferencesManagerTest {
             PreferencesManager.KEY_DISABLE_TOAST,
             PreferencesManager.KEY_DISABLE_SHUTTER,
             PreferencesManager.KEY_DISABLE_VIBRATION,
-            PreferencesManager.KEY_VOLUME_ACTION,
             PreferencesManager.KEY_VOLUME_UP_ACTION,
             PreferencesManager.KEY_VOLUME_DOWN_ACTION,
             PreferencesManager.KEY_DEFAULT_CAMERA

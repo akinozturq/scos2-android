@@ -76,18 +76,6 @@ fun MainScreen(
                     Text("Toggle Overlay")
                 }
             }
-
-            Spacer(Modifier.height(16.dp))
-            OutlinedButton(
-                onClick = {
-                    context.startActivity(Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Icon(Icons.Default.VolumeUp, contentDescription = null)
-                Spacer(Modifier.width(8.dp))
-                Text("Enable Hardware Volume Keys")
-            }
         }
     }
 }

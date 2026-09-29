@@ -51,7 +51,7 @@ class CameraController(
     private var previewView: PreviewView? = null
     private var activeRecording: Recording? = null
     private var cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
-    private val cameraExecutor: ExecutorService = Executors.newSingleThreadExecutor()
+    private var cameraExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private var lifecycleOwner: LifecycleOwner? = null
     private var isFrontCamera = false
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -81,6 +81,9 @@ class CameraController(
 
     fun startCamera(owner: LifecycleOwner? = null) {
         lifecycleOwner = owner
+        if (cameraExecutor.isShutdown || cameraExecutor.isTerminated) {
+            cameraExecutor = Executors.newSingleThreadExecutor()
+        }
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
         cameraProviderFuture.addListener({
             try {
